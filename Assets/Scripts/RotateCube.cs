@@ -2,28 +2,29 @@ using UnityEngine;
 using DG.Tweening;
 
 /// <summary>
-/// Controls whole-cube view rotation — orbit and 90° steps along all 3 axes (X, Y, Z).
-///
-/// In angled/isometric camera view, 6 swipe directions correspond to 3 rotation axes:
-///   1. Left / Right         -> Rotate around Y axis (+90° / -90°)
-///   2. Up-Left / Down-Right  -> Rotate around X axis (+90° / -90°)
-///   3. Down-Left / Up-Right  -> Rotate around Z axis (+90° / -90°)
+/// Controls whole-cube view rotation — smooth free 3D orbit and nearest 90° orthogonal snapping.
+/// Works identically on PC (right-click drag) and mobile/touch (2-finger drag).
+/// Players can freely rotate the cube around multiple axes, and upon release it seamlessly snaps
+/// to the closest 90° face orientation right where they left it, rather than snapping backward.
 /// </summary>
 public class RotateCube : MonoBehaviour
 {
     // ── Inspector ─────────────────────────────────────────────────────────────
     /// <summary>
-    /// Logical target — swipes rotate this by 90°.
-    /// Visual cube tweens toward this on release.
+    /// Optional logical target reference for inspector backwards-compatibility.
     /// </summary>
     public GameObject target;
 
     // ── Tween state ───────────────────────────────────────────────────────────
     private Tween snapTween;
-    private Tween swipeTween;
+    private const float SnapDuration = 0.28f; // snappy, smooth feel
 
-    private const float SnapDuration  = 0.35f;  // drag-release snap
-    private const float SwipeDuration = 0.35f;  // 90° swipe step
+    // Cardinal directions for 90° cube orientations
+    private static readonly Vector3[] Cardinals = {
+        Vector3.forward, Vector3.back,
+        Vector3.up,      Vector3.down,
+        Vector3.right,   Vector3.left
+    };
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
     void Start()
@@ -39,125 +40,106 @@ public class RotateCube : MonoBehaviour
         CubeInputReader.Instance.OnSecondaryDelta    -= HandleOrbit;
         CubeInputReader.Instance.OnSecondaryReleased -= HandleSecondaryReleased;
         snapTween?.Kill();
-        swipeTween?.Kill();
     }
 
-    // ── Orbit (raw, direct drag) ──────────────────────────────────────────────
+    // ── Orbit (free 3D continuous rotation) ───────────────────────────────────
 
     /// <summary>
-    /// Directly applies the delta from CubeInputReader while dragging right-mouse.
-    /// Kills any running snap tween so drag feels immediate.
+    /// Directly applies input delta to freely rotate the cube around any and all axes.
+    /// Kills any running snap tween so dragging feels instantaneous and 1:1 responsive.
     /// </summary>
     private void HandleOrbit(Vector2 scaledDelta)
     {
         snapTween?.Kill();
-        swipeTween?.Kill();
 
+        // Rotate in world space relative to camera view
         Quaternion rot = Quaternion.Euler(scaledDelta.y, -scaledDelta.x, 0);
         transform.rotation = rot * transform.rotation;
+
+        if (target != null)
+        {
+            target.transform.rotation = transform.rotation;
+        }
     }
 
-    // ── Release / Swipe ───────────────────────────────────────────────────────
+    // ── Release / Snap ────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Called once per secondary contact release.
-    /// swipeDir is the normalised gesture direction, or Vector2.zero for a short drag.
+    /// Called when the player releases right-click or finishes a swipe gesture.
+    /// Snaps smoothly to the nearest valid 90° orthogonal cube orientation
+    /// right where the player left it, supporting multi-turn and multi-axis spins.
     /// </summary>
     private void HandleSecondaryReleased(Vector2 swipeDir)
     {
-        if (swipeDir != Vector2.zero)
-        {
-            ApplySwipeStep(swipeDir);
-        }
-        else
-        {
-            TweenSnapToTarget();
-        }
+        SnapToNearestOrientation();
     }
 
     /// <summary>
-    /// Rotates target 90° on all 3 main axes (and their opposites) based on swipe angle:
-    ///   - Left / Right        -> Y-axis
-    ///   - Up-Left / Down-Right -> X-axis
-    ///   - Down-Left / Up-Right -> Z-axis
+    /// Finds the closest 90° orthogonal orientation out of the 24 possible cube orientations
+    /// and smoothly animates the cube into alignment.
     /// </summary>
-    private void ApplySwipeStep(Vector2 swipe)
+    public void SnapToNearestOrientation()
     {
-        Vector3 axis = Vector3.zero;
-        float angle = 90f;
+        Quaternion snappedRot = GetNearestOrthogonalRotation(transform.rotation);
 
-        // 1. Horizontal swipes -> Y-Axis rotation
-        if (IsLeft(swipe))
+        if (target != null)
         {
-            axis = Vector3.up;
-            angle = 90f;
+            target.transform.rotation = snappedRot;
         }
-        else if (IsRight(swipe))
-        {
-            axis = Vector3.up;
-            angle = -90f;
-        }
-        // 2. Diagonal 1 (Up-Left / Down-Right) -> X-Axis rotation
-        else if (IsUpLeft(swipe))
-        {
-            axis = Vector3.right;
-            angle = 90f;
-        }
-        else if (IsDownRight(swipe))
-        {
-            axis = Vector3.right;
-            angle = -90f;
-        }
-        // 3. Diagonal 2 (Up-Right / Down-Left) -> Z-Axis rotation
-        else if (IsUpRight(swipe))
-        {
-            axis = Vector3.forward;
-            angle = -90f;
-        }
-        else if (IsDownLeft(swipe))
-        {
-            axis = Vector3.forward;
-            angle = 90f;
-        }
-
-        if (axis == Vector3.zero)
-        {
-            TweenSnapToTarget();
-            return;
-        }
-
-        // Step the logical target instantly
-        target.transform.Rotate(axis, angle, Space.World);
-
-        // Animate visual cube with DOTween
-        snapTween?.Kill();
-        swipeTween?.Kill();
-        swipeTween = transform
-            .DORotateQuaternion(target.transform.rotation, SwipeDuration)
-            .SetEase(Ease.OutBack)
-            .OnComplete(() => swipeTween = null);
-    }
-
-    /// <summary>
-    /// Smoothly rotates the visual cube to match target.transform.rotation.
-    /// </summary>
-    private void TweenSnapToTarget()
-    {
-        if (DOTween.IsTweening(transform)) return;
-        if (Quaternion.Angle(transform.rotation, target.transform.rotation) < 0.5f) return;
 
         snapTween?.Kill();
         snapTween = transform
-            .DORotateQuaternion(target.transform.rotation, SnapDuration)
-            .SetEase(Ease.OutQuint)
+            .DORotateQuaternion(snappedRot, SnapDuration)
+            .SetEase(Ease.OutCubic)
             .OnComplete(() => snapTween = null);
     }
 
-    // ── Direction predicates for the 6 isometric swipe angles ────────────────
-    private bool IsLeft(Vector2 s)      => s.x < 0 && s.y > -0.5f && s.y < 0.5f;
-    private bool IsRight(Vector2 s)     => s.x > 0 && s.y > -0.5f && s.y < 0.5f;
-    private bool IsUpLeft(Vector2 s)    => s.y > 0 && s.x < 0f;
-    private bool IsUpRight(Vector2 s)   => s.y > 0 && s.x >= 0f;
-    private bool IsDownLeft(Vector2 s)  => s.y < 0 && s.x < 0f;
-    private bool IsDownRight(Vector2 s) => s.y < 0 && s.x >= 0f;
+    /// <summary>
+    /// Calculates the closest 90-degree orthogonal cube rotation to the given orientation.
+    /// </summary>
+    public static Quaternion GetNearestOrthogonalRotation(Quaternion currentRot)
+    {
+        Vector3 currentForward = currentRot * Vector3.forward;
+        Vector3 snappedForward = SnapToCardinal(currentForward);
+
+        Vector3 currentUp = currentRot * Vector3.up;
+        Vector3 snappedUp = SnapToCardinalOrtho(currentUp, snappedForward);
+
+        return Quaternion.LookRotation(snappedForward, snappedUp);
+    }
+
+    private static Vector3 SnapToCardinal(Vector3 v)
+    {
+        Vector3 best = Vector3.forward;
+        float maxDot = -2f;
+        foreach (Vector3 c in Cardinals)
+        {
+            float d = Vector3.Dot(v, c);
+            if (d > maxDot)
+            {
+                maxDot = d;
+                best = c;
+            }
+        }
+        return best;
+    }
+
+    private static Vector3 SnapToCardinalOrtho(Vector3 v, Vector3 normal)
+    {
+        Vector3 best = Vector3.up;
+        float maxDot = -2f;
+        foreach (Vector3 c in Cardinals)
+        {
+            // Must be strictly perpendicular to normal
+            if (Mathf.Abs(Vector3.Dot(c, normal)) > 0.1f) continue;
+
+            float d = Vector3.Dot(v, c);
+            if (d > maxDot)
+            {
+                maxDot = d;
+                best = c;
+            }
+        }
+        return best;
+    }
 }
