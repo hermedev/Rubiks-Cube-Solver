@@ -91,7 +91,13 @@ public class RotateCube : MonoBehaviour
         snapTween = transform
             .DORotateQuaternion(snappedRot, SnapDuration)
             .SetEase(Ease.OutCubic)
-            .OnComplete(() => snapTween = null);
+            .OnComplete(() =>
+            {
+                snapTween = null;
+                // Update 2D net dynamically to match the newly faced orientation!
+                CubeMap cm = FindAnyObjectByType<CubeMap>();
+                if (cm != null) cm.set();
+            });
     }
 
     /// <summary>
