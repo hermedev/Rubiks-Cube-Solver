@@ -28,7 +28,7 @@ public class SelectFace : MonoBehaviour
 
     void OnDestroy()
     {
-        if (CubeInputReader.Instance != null)
+        if (CubeInputReader.HasInstance)
             CubeInputReader.Instance.OnTapBegan -= HandleTap;
     }
 
@@ -63,7 +63,7 @@ public class SelectFace : MonoBehaviour
         {
             if (cubeSide.Contains(face))
             {
-                cubeState.PickUp(cubeSide);
+                cubeState.PickUp(cubeSide, hit.point);
                 break; // a face belongs to exactly one side
             }
         }

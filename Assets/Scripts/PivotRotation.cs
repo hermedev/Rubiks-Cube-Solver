@@ -22,7 +22,8 @@ public class PivotRotation : MonoBehaviour
     private CubeState cubeState;
 
     private float sensitivity = 0.4f;
-    private Vector3 rotation;
+    private Vector2 screenTangent = Vector2.right;
+    private Vector3 localAxis = Vector3.up;
 
     private Tween snapTween;
 
@@ -42,14 +43,72 @@ public class PivotRotation : MonoBehaviour
     // ── Public API ────────────────────────────────────────────────────────────
 
     /// <summary>Called by CubeState.PickUp() — begins face-drag session.</summary>
-    public void Rotate(List<GameObject> side)
+    public void Rotate(List<GameObject> side, Vector3 hitPoint = default)
     {
         if (CubeInput.IsLocked) return;
 
         activeSide = side;
         startEuler = transform.localEulerAngles;
         dragging = true;
+
+        ComputeDragTangent(side, hitPoint);
         SubscribeToInput();
+    }
+
+    private void ComputeDragTangent(List<GameObject> side, Vector3 hitPoint)
+    {
+        if (cubeState == null) cubeState = FindAnyObjectByType<CubeState>();
+
+        // 1. Determine local rotation axis for this side:
+        if (side == cubeState.up) localAxis = Vector3.up;
+        else if (side == cubeState.Down) localAxis = Vector3.down;
+        else if (side == cubeState.left) localAxis = Vector3.forward;
+        else if (side == cubeState.right) localAxis = Vector3.back;
+        else if (side == cubeState.front) localAxis = Vector3.left;
+        else if (side == cubeState.back) localAxis = Vector3.right;
+        else localAxis = Vector3.up;
+
+        // 2. Local axis in world space:
+        Vector3 worldAxis = transform.TransformDirection(localAxis);
+        Vector3 center = transform.position;
+
+        // 3. Lever arm from center of face to clicked point:
+        Vector3 r = hitPoint != Vector3.zero ? (hitPoint - center) : Vector3.zero;
+
+        // If clicked on center piece or r is too small, default to horizontal camera right
+        if (r.sqrMagnitude < 0.04f)
+        {
+            Camera c = Camera.main;
+            Vector3 camRight = c != null ? c.transform.right : Vector3.right;
+            r = Vector3.Cross(worldAxis, camRight);
+            if (r.sqrMagnitude < 0.01f) r = Vector3.Cross(worldAxis, Vector3.up);
+        }
+
+        Vector3 rNorm = r.normalized;
+
+        // 4. World tangent direction for positive rotation around worldAxis:
+        Vector3 worldTangent = Vector3.Cross(worldAxis, rNorm);
+
+        // 5. Project worldTangent onto the screen using Camera.main:
+        Camera cam = Camera.main;
+        if (cam != null)
+        {
+            float screenX = Vector3.Dot(worldTangent, cam.transform.right);
+            float screenY = Vector3.Dot(worldTangent, cam.transform.up);
+            screenTangent = new Vector2(screenX, screenY);
+            if (screenTangent.sqrMagnitude > 0.0001f)
+            {
+                screenTangent.Normalize();
+            }
+            else
+            {
+                screenTangent = Vector2.right;
+            }
+        }
+        else
+        {
+            screenTangent = Vector2.right;
+        }
     }
 
     // ── Input Subscriptions ───────────────────────────────────────────────────
@@ -84,28 +143,19 @@ public class PivotRotation : MonoBehaviour
         SnapToNearestAngle();
     }
 
-    // ── Spin (raw, direct — dominant drag) ────────────────────────────────────
+    // ── Spin (raw, direct — screen-projected tangent drag) ───────────────────
 
     /// <summary>
-    /// Maps dominant input delta directly to pivot rotation while dragging.
-    /// Dominant delta prevents diagonal mouse cancellation.
+    /// Projects screen drag delta onto the exact 2D screen tangent of the touched piece.
+    /// Perfectly mirrors the user's cursor movement in all quadrants (left, right, top, bottom)
+    /// without inverted or backwards drag glitches.
     /// </summary>
     private void SpinSide(List<GameObject> side, Vector2 delta)
     {
-        rotation = Vector3.zero;
+        float dragAmount = Vector2.Dot(delta, screenTangent);
+        float angle = dragAmount * sensitivity;
 
-        // Use dominant direction to prevent cancelling when dragging diagonally
-        float dominant = Mathf.Abs(delta.x) >= Mathf.Abs(delta.y) ? delta.x : delta.y;
-        float mag = dominant * sensitivity;
-
-        if (side == cubeState.up) rotation.y = mag * 1f;
-        else if (side == cubeState.Down) rotation.y = mag * -1f;
-        else if (side == cubeState.left) rotation.z = mag * 1f;
-        else if (side == cubeState.right) rotation.z = mag * -1f;
-        else if (side == cubeState.front) rotation.x = mag * -1f;
-        else if (side == cubeState.back) rotation.x = mag * 1f;
-
-        transform.Rotate(rotation, Space.Self);
+        transform.Rotate(localAxis * angle, Space.Self);
     }
 
     // ── Snap (DOTween) ────────────────────────────────────────────────────────

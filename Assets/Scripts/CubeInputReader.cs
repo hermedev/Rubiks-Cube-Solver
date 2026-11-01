@@ -17,14 +17,21 @@ public class CubeInputReader : MonoBehaviour
 {
     // ── Singleton with Auto-Instantiation ──────────────────────────────────────
     private static CubeInputReader _instance;
+    private static bool _isQuitting;
+
+    /// <summary>Returns true if an active instance exists and the game is not shutting down.</summary>
+    public static bool HasInstance => _instance != null && !_isQuitting;
+
     public static CubeInputReader Instance
     {
         get
         {
+            if (_isQuitting) return null;
+
             if (_instance == null)
             {
                 _instance = FindAnyObjectByType<CubeInputReader>();
-                if (_instance == null)
+                if (_instance == null && !_isQuitting)
                 {
                     GameObject go = new GameObject("CubeInputReader");
                     _instance = go.AddComponent<CubeInputReader>();
@@ -35,9 +42,15 @@ public class CubeInputReader : MonoBehaviour
         }
     }
 
+    private void OnApplicationQuit()
+    {
+        _isQuitting = true;
+    }
+
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
     private static void AutoInitialize()
     {
+        _isQuitting = false;
         _ = Instance;
     }
 
@@ -88,13 +101,17 @@ public class CubeInputReader : MonoBehaviour
 
     void Awake()
     {
+        if (_isQuitting) return;
         if (_instance != null && _instance != this) { Destroy(gameObject); return; }
         _instance = this;
         DontDestroyOnLoad(gameObject);
 
         // Initialise DOTween once here so no other script needs to
-        DOTween.Init(recycleAllByDefault: true, useSafeMode: true)
-               .SetCapacity(50, 10);
+        if (!_isQuitting)
+        {
+            DOTween.Init(recycleAllByDefault: true, useSafeMode: true)
+                   .SetCapacity(50, 10);
+        }
 
         BuildAndEnableActions();
     }

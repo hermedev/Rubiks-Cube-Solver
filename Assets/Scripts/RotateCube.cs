@@ -2,13 +2,15 @@ using UnityEngine;
 using DG.Tweening;
 
 /// <summary>
-/// Controls whole-cube view rotation — smooth free 3D orbit and nearest 90° orthogonal snapping.
+/// Controls whole-cube view rotation — smooth 3D trackball orbit along all 3 axes (X, Y, Z)
+/// and nearest 90° orthogonal snapping.
 /// Works identically on PC (right-click drag) and mobile/touch (2-finger drag).
-/// Players can freely rotate the cube around multiple axes, and upon release it seamlessly snaps
-/// to the closest 90° face orientation right where they left it, rather than snapping backward.
+/// Allows rotating around any direction (horizontal, vertical, diagonal) without locked axes.
 /// </summary>
 public class RotateCube : MonoBehaviour
 {
+    public static RotateCube Instance { get; private set; }
+
     // ── Inspector ─────────────────────────────────────────────────────────────
     /// <summary>
     /// Optional logical target reference for inspector backwards-compatibility.
@@ -26,6 +28,11 @@ public class RotateCube : MonoBehaviour
         Vector3.right,   Vector3.left
     };
 
+    void Awake()
+    {
+        Instance = this;
+    }
+
     // ── Lifecycle ─────────────────────────────────────────────────────────────
     void Start()
     {
@@ -36,25 +43,53 @@ public class RotateCube : MonoBehaviour
 
     void OnDestroy()
     {
-        if (CubeInputReader.Instance == null) return;
-        CubeInputReader.Instance.OnSecondaryDelta    -= HandleOrbit;
-        CubeInputReader.Instance.OnSecondaryReleased -= HandleSecondaryReleased;
+        if (CubeInputReader.HasInstance)
+        {
+            CubeInputReader.Instance.OnSecondaryDelta    -= HandleOrbit;
+            CubeInputReader.Instance.OnSecondaryReleased -= HandleSecondaryReleased;
+        }
         snapTween?.Kill();
     }
 
-    // ── Orbit (free 3D continuous rotation) ───────────────────────────────────
+    // ── Orbit (free 3D continuous rotation across all 3 axes) ─────────────────
 
     /// <summary>
-    /// Directly applies input delta to freely rotate the cube around any and all axes.
-    /// Kills any running snap tween so dragging feels instantaneous and 1:1 responsive.
+    /// Smooth 3D rotation aligned with the isometric camera view.
+    /// Decomposes mouse/touch drag into all 3 natural axes of the Rubik's cube:
+    ///   - Horizontal drag -> World Y (clean horizontal yaw)
+    ///   - Up-Left / Down-Right drag -> World X (tilt left-front face)
+    ///   - Up-Right / Down-Left drag -> World Z (tilt right-front face)
+    /// Completely eliminates the locked-axis bug and allows full, unrestricted 3-axis rotation.
     /// </summary>
     private void HandleOrbit(Vector2 scaledDelta)
     {
         snapTween?.Kill();
 
-        // Rotate in world space relative to camera view
-        Quaternion rot = Quaternion.Euler(scaledDelta.y, -scaledDelta.x, 0);
-        transform.rotation = rot * transform.rotation;
+        // 3-axis isometric decomposition
+        float wx = (scaledDelta.y - scaledDelta.x) * 0.7071f;
+        float wz = (-scaledDelta.y - scaledDelta.x) * 0.7071f;
+        float wy = -scaledDelta.x;
+
+        // When drag is predominantly horizontal, suppress X and Z so spinning left/right is crisp
+        float absX = Mathf.Abs(scaledDelta.x);
+        float absY = Mathf.Abs(scaledDelta.y);
+        if (absX > absY * 2.0f)
+        {
+            wx = 0f;
+            wz = 0f;
+        }
+        else if (absY > absX * 0.5f)
+        {
+            // Predominantly vertical/diagonal drag: dampen wy so face tilting doesn't veer sideways
+            wy *= 0.2f;
+        }
+
+        Vector3 rotVec = new Vector3(wx, wy, wz);
+        if (rotVec.sqrMagnitude > 0.0001f)
+        {
+            Quaternion rotDelta = Quaternion.Euler(rotVec);
+            transform.rotation = rotDelta * transform.rotation;
+        }
 
         if (target != null)
         {
